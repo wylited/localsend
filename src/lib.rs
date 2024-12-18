@@ -6,7 +6,9 @@ pub mod transfer;
 
 use crate::models::device::DeviceInfo;
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddrV4};
+use tokio::net::UdpSocket;
+use tokio::task::JoinHandle;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use transfer::session::Session;
@@ -24,10 +26,12 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn default() -> crate::error::Result<Self> {
+    pub async fn default() -> crate::error::Result<Self> {
         let device = DeviceInfo::default();
-        let socket = UdpSocket::bind("0.0.0.0:53317").unwrap();
-        socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 167), &Ipv4Addr::new(0, 0, 0, 0))?;
+        let socket = UdpSocket::bind("0.0.0.0:53317").await?;
+        socket.set_multicast_loop_v4(true)?;
+        socket.set_multicast_ttl_v4(255)?;
+        socket.join_multicast_v4(Ipv4Addr::new(224, 0, 0, 167), Ipv4Addr::new(0, 0, 0, 0))?;
         let multicast_addr = SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 167), 53317);
         let port = 53317;
         let peers = Arc::new(Mutex::new(HashMap::new()));
@@ -47,7 +51,7 @@ impl Client {
         })
     }
 
-    pub async fn start(&self) -> crate::error::Result<()> {
+    pub async fn start(&self) -> crate::error::Result<(JoinHandle<()>, JoinHandle<()>, JoinHandle<()>)> {
         let server_handle = {
             let client = self.clone();
             tokio::spawn(async move {
@@ -60,7 +64,7 @@ impl Client {
         let udp_handle = {
             let client = self.clone();
             tokio::spawn(async move {
-                if let Err(e) = client.listen_musticast().await {
+                if let Err(e) = client.listen_multicast().await {
                     eprintln!("UDP listener error: {}", e);
                 }
             })
@@ -78,8 +82,6 @@ impl Client {
             })
         };
 
-        tokio::try_join!(server_handle, udp_handle, announcement_handle)?;
-
-        Ok(())
+        Ok((server_handle, udp_handle, announcement_handle))
     }
 }
