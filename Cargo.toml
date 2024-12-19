@@ -9,7 +9,7 @@ repository = "https://github.com/wylited/localsend"
 readme = "README.md"
 
 [dependencies]
-axum = { version = "0.7.9", features = ["json", "macros"] }
+axum = { version = "0.7.9", features = ["json", "macros", "tokio"] }
 axum-macros = "0.4.2"
 chrono = "0.4.39"
 futures = "0.3.31"

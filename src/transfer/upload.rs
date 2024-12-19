@@ -12,6 +12,7 @@ use native_dialog::MessageDialog;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
+use crate::error::{LocalSendError, Result};
 use crate::transfer::session::{Session, SessionStatus};
 use crate::{models::{device::DeviceInfo, file::FileMetadata}, Client};
 
@@ -29,7 +30,16 @@ pub struct PrepareUploadRequest {
         files: HashMap<String, FileMetadata>,
 }
 
-impl Client {}
+impl Client {
+    pub async fn prepare_upload(&self, peer: String, files: HashMap<String, FileMetadata>) -> Result<Session> {
+        // Check if the peer exists
+        if !self.peers.lock().await.contains_key(&peer) {
+            return Err(LocalSendError::PeerNotFound);
+        }
+
+        Err(LocalSendError::PeerNotFound)
+    }
+}
 
 pub async fn register_prepare_upload(
     Extension(client): Extension<DeviceInfo>,

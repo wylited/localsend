@@ -18,8 +18,11 @@ impl Client {
                 return;
             }
 
+            let mut src = src;
+            src.set_port(device.port); // Update the port to the one the device sent
+
             let mut peers = self.peers.lock().await;
-            peers.insert(device.fingerprint.clone(), device.clone());
+            peers.insert(device.fingerprint.clone(), (src.clone(), device.clone()));
 
             if device.announce != Some(true) {
                 return;

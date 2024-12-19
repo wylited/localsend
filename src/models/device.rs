@@ -9,6 +9,7 @@ pub enum DeviceType {
     Web,
     Headless,
     Server,
+    Unknown,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

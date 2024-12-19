@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::sync::Mutex;
 
-use axum::{extract::State, Extension, Json};
+use axum::{extract::{ConnectInfo, State}, Extension, Json};
 
 use crate::{models::device::DeviceInfo, Client};
 
@@ -20,7 +20,7 @@ impl Client {
         let mut address_list = Vec::new();
         for j in 0..256 {
             for k in 0..256 {
-                address_list.push(format!("192.168.{:03}.{}", j, k));
+                address_list.push(format!("192.168.{:03}.{}:53317", j, k));
             }
         }
 
@@ -33,10 +33,11 @@ impl Client {
 }
 
 pub async fn register_device(
-    State(peers): State<Arc<Mutex<HashMap<String, DeviceInfo>>>>,
+    State(peers): State<Arc<Mutex<HashMap<String, (SocketAddr, DeviceInfo)>>>>,
     Extension(client): Extension<DeviceInfo>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(device): Json<DeviceInfo>,
 ) -> Json<DeviceInfo> {
-    peers.lock().await.insert(device.fingerprint.clone(), device.clone());
+    peers.lock().await.insert(device.fingerprint.clone(), (addr, device.clone()));
     Json(client)
 }
