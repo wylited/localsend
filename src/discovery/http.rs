@@ -38,6 +38,8 @@ pub async fn register_device(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(device): Json<DeviceInfo>,
 ) -> Json<DeviceInfo> {
+    let mut addr = addr;
+    addr.set_port(device.port);
     peers.lock().await.insert(device.fingerprint.clone(), (addr, device.clone()));
     Json(client)
 }

@@ -31,13 +31,40 @@ pub struct PrepareUploadRequest {
 }
 
 impl Client {
-    pub async fn prepare_upload(&self, peer: String, files: HashMap<String, FileMetadata>) -> Result<Session> {
-        // Check if the peer exists
+    pub async fn prepare_upload(&self, peer: String, files: HashMap<String, FileMetadata>) -> Result<PrepareUploadResponse> {
         if !self.peers.lock().await.contains_key(&peer) {
             return Err(LocalSendError::PeerNotFound);
         }
 
-        Err(LocalSendError::PeerNotFound)
+        let peer = self.peers.lock().await.get(&peer).unwrap().clone();
+        println!("Peer: {:?}", peer);
+
+        let response = self
+            .http_client
+            .post(&format!("{}://{}/api/localsend/v2/prepare-upload", peer.1.protocol, peer.0))
+            .json(&PrepareUploadRequest {
+                info: self.device.clone(),
+                files: files.clone(),
+            })
+            .send()
+            .await?;
+
+        println!("Response: {:?}", response);
+
+        let response: PrepareUploadResponse = response.json().await?;
+
+        let session = Session {
+            session_id: response.session_id.clone(),
+            files,
+            file_tokens: response.files.clone(),
+            receiver: peer.1,
+            sender: self.device.clone(),
+            status: SessionStatus::Active
+        };
+
+        self.sessions.lock().await.insert(response.session_id.clone(), session);
+
+        Ok(response)
     }
 }
 
