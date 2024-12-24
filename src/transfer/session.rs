@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, net::SocketAddr};
 
 use crate::models::{device::DeviceInfo, file::FileMetadata};
 
@@ -9,6 +9,7 @@ pub struct Session {
     pub receiver: DeviceInfo,
     pub sender: DeviceInfo,
     pub status: SessionStatus,
+    pub addr: SocketAddr,
 }
 
 #[derive(PartialEq)]

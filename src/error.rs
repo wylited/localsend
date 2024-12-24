@@ -26,6 +26,15 @@ pub enum LocalSendError {
 
     #[error("Peer not found")]
     PeerNotFound,
+
+    #[error("Upload failed")]
+    UploadFailed,
+
+    #[error("Invalid token")]
+    InvalidToken,
+
+    #[error("Session inactive")]
+    SessionInactive,
 }
 
 pub type Result<T> = std::result::Result<T, LocalSendError>;

@@ -14,8 +14,8 @@ A rust implementation of the [localsend protocol](https://github.com/localsend/p
     - [x] Prepare Upload
     - [x] Upload
     - [x] Cancel
-  - [ ] Sending
-    - [ ] Prepare Upload
+  - [x] Sending
+    - [x] Prepare Upload
     - [ ] Upload
     - [ ] Cancel
 - [ ] Download API

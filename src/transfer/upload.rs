@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::Query;
+use axum::extract::{ConnectInfo, Query};
 use axum::Extension;
 use axum::{response::IntoResponse, Json};
 use axum::http::StatusCode;
@@ -19,15 +20,15 @@ use crate::{models::{device::DeviceInfo, file::FileMetadata}, Client};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareUploadResponse {
-    session_id: String,
-    files: HashMap<String, String>,
+    pub session_id: String,
+    pub files: HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepareUploadRequest {
-        info: DeviceInfo,
-        files: HashMap<String, FileMetadata>,
+    pub info: DeviceInfo,
+    pub files: HashMap<String, FileMetadata>,
 }
 
 impl Client {
@@ -41,7 +42,7 @@ impl Client {
 
         let response = self
             .http_client
-            .post(&format!("{}://{}/api/localsend/v2/prepare-upload", peer.1.protocol, peer.0))
+            .post(&format!("{}://{}/api/localsend/v2/prepare-upload", peer.1.protocol, peer.0.clone()))
             .json(&PrepareUploadRequest {
                 info: self.device.clone(),
                 files: files.clone(),
@@ -59,18 +60,79 @@ impl Client {
             file_tokens: response.files.clone(),
             receiver: peer.1,
             sender: self.device.clone(),
-            status: SessionStatus::Active
+            status: SessionStatus::Active,
+            addr: peer.0,
         };
 
         self.sessions.lock().await.insert(response.session_id.clone(), session);
 
         Ok(response)
     }
+
+    pub async fn upload(&self, session_id: String, file_id: String, token: String, body: Bytes) -> Result<()> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions.get(&session_id).unwrap();
+
+        if session.status != SessionStatus::Active {
+            return Err(LocalSendError::SessionInactive);
+        }
+
+        if session.file_tokens.get(&file_id) != Some(&token) {
+            return Err(LocalSendError::InvalidToken);
+        }
+
+        let request = self
+            .http_client
+            .post(&format!("{}://{}/api/localsend/v2/upload?sessionId={}&fileId={}&token={}", session.receiver.protocol, session.addr, session_id, file_id, token))
+            //.post(&format!("https://webhook.site/2f23a529-b687-4375-ad5f-54906ab26ac7?session_id={}&file_id={}&token={}", session_id, file_id, token))
+            .body(body);
+
+        println!("Uploading file: {:?}", request);
+        let response = request.send().await?;
+
+        if response.status() != 200 {
+            println!("Upload failed: {:?}", response);
+            return Err(LocalSendError::UploadFailed);
+        }
+
+        Ok(())
+    }
+
+    pub async fn send_file(&self, peer: String, file_path: PathBuf) -> Result<()> {
+        // Generate file metadata
+        let file_metadata = FileMetadata::from_path(&file_path)?;
+
+        // Prepare files map
+        let mut files = HashMap::new();
+        files.insert(file_metadata.id.clone(), file_metadata.clone());
+
+        // Prepare upload
+        let prepare_response = self.prepare_upload(peer, files).await?;
+
+        // Get file token
+        let token = prepare_response.files.get(&file_metadata.id)
+            .ok_or(LocalSendError::InvalidToken)?;
+
+        // Read file contents
+        let file_contents = tokio::fs::read(&file_path).await?;
+        let bytes = Bytes::from(file_contents);
+
+        // Upload file
+        self.upload(
+            prepare_response.session_id,
+            file_metadata.id,
+            token.clone(),
+            bytes
+        ).await?;
+
+        Ok(())
+    }
 }
 
 pub async fn register_prepare_upload(
     Extension(client): Extension<DeviceInfo>,
     Extension(sessions): Extension<Arc<Mutex<HashMap<String, Session>>>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<PrepareUploadRequest>,
 ) -> impl IntoResponse {
     println!("Received upload request from alias: {}", req.info.alias);
@@ -94,7 +156,8 @@ pub async fn register_prepare_upload(
             file_tokens: file_tokens.clone(),
             receiver: client.clone(),
             sender: req.info.clone(),
-            status: SessionStatus::Active
+            status: SessionStatus::Active,
+            addr,
         };
 
         sessions.lock().await.insert(session_id.clone(), session);
