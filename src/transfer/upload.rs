@@ -127,6 +127,23 @@ impl Client {
 
         Ok(())
     }
+
+    pub async fn cancel_upload(&self, session_id: String) -> Result<()> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions.get(&session_id).unwrap();
+
+        let request = self
+            .http_client
+            .post(&format!("{}://{}/api/localsend/v2/cancel?sessionId={}", session.receiver.protocol, session.addr, session_id))
+            .send()
+            .await?;
+
+        if request.status() != 200 {
+            return Err(LocalSendError::CancelFailed);
+        }
+
+        Ok(())
+    }
 }
 
 pub async fn register_prepare_upload(

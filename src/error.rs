@@ -35,6 +35,9 @@ pub enum LocalSendError {
 
     #[error("Session inactive")]
     SessionInactive,
+
+    #[error("Cancel Failed")]
+    CancelFailed,
 }
 
 pub type Result<T> = std::result::Result<T, LocalSendError>;
