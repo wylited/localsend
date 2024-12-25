@@ -12,7 +12,6 @@ readme = "README.md"
 axum = { version = "0.7.9", features = ["json", "macros", "tokio"] }
 axum-macros = "0.4.2"
 chrono = "0.4.39"
-futures = "0.3.31"
 mime = "0.3.17"
 mime_guess = "2.0.5"
 native-dialog = "0.7.0"
