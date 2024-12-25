@@ -1,7 +1,10 @@
 use std::{collections::HashMap, net::SocketAddr};
 
+use serde::{Deserialize, Serialize};
+
 use crate::models::{device::DeviceInfo, file::FileMetadata};
 
+#[derive(Deserialize, Serialize)]
 pub struct Session {
     pub session_id: String,
     pub files: HashMap<String, FileMetadata>,
@@ -12,7 +15,7 @@ pub struct Session {
     pub addr: SocketAddr,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Deserialize, Serialize)]
 pub enum SessionStatus {
     Pending,
     Active,

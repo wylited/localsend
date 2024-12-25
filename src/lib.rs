@@ -107,4 +107,9 @@ impl Client {
 
         Ok((server_handle, udp_handle, announcement_handle))
     }
+
+    pub async fn refresh_peers(&self) {
+        let mut peers = self.peers.lock().await;
+        peers.clear();
+    }
 }

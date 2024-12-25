@@ -1,5 +1,4 @@
 use crate::Client;
-use std::time::Duration;
 
 impl Client {
     pub async fn announce_multicast(&self) -> crate::error::Result<()> {
