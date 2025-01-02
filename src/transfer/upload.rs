@@ -192,13 +192,13 @@ pub async fn register_prepare_upload(
 pub async fn register_upload(
     Query(params): Query<UploadParams>,
     Extension(sessions): Extension<Arc<Mutex<HashMap<String, Session>>>>,
+    Extension(download_dir): Extension<String>,
     body: Bytes,
 ) -> impl IntoResponse {
     // Extract query parameters
     let session_id = &params.session_id;
     let file_id = &params.file_id;
     let token = &params.token;
-    let download_dir = PathBuf::from("/home/wyli/Downloads");
 
     // Get session and validate
     let mut sessions_lock = sessions.lock().await;
@@ -237,7 +237,7 @@ pub async fn register_upload(
     }
 
     // Create file path
-    let file_path = download_dir.join(&file_metadata.file_name);
+    let file_path = format!("{}/{}", download_dir, file_metadata.file_name);
 
     // Write file
     if let Err(e) = tokio::fs::write(&file_path, body).await {

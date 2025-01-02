@@ -37,7 +37,7 @@ impl Client {
         let peers = Arc::new(Mutex::new(HashMap::new()));
         let http_client = reqwest::Client::new();
         let sessions = Arc::new(Mutex::new(HashMap::new()));
-        let download_dir = "/home/wyli/Downloads".to_string();
+        let download_dir = "/home/localsend".to_string();
 
         Ok(Self {
             device,

@@ -35,6 +35,7 @@ impl Client {
             .layer(RequestBodyLimitLayer::new(1024 * 1024 * 1024))
             .layer(Extension(self.device.clone()))
             .layer(Extension(self.sessions.clone()))
+            .layer(Extension(self.download_dir.clone()))
             .with_state(peers)
 
     }
