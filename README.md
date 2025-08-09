@@ -23,4 +23,4 @@ A rust implementation of the [localsend protocol](https://github.com/localsend/p
   - [ ] File
 - [x] Additional
   - [x] Info
-- [ ] HTTPS support
+- [x] HTTPS support
