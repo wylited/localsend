@@ -24,3 +24,10 @@ A rust implementation of the [localsend protocol](https://github.com/localsend/p
 - [x] Additional
   - [x] Info
 - [x] HTTPS support
+
+## Credits
+Big thanks to [@nebkor](https://github.com/nebkor) for adding
+- HTTPS
+- persistent configuration
+- no more UI implementation mandated (no more native_notifications; events are sent over MPSC channels that any front-end UI can react to as they wish)
+- support for sending text without an actual file existing
