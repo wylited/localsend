@@ -1,6 +1,6 @@
 [package]
 name = "localsend"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "A rust implementation of the localsend protocol"
@@ -9,17 +9,25 @@ repository = "https://github.com/wylited/localsend"
 readme = "README.md"
 
 [dependencies]
-axum = { version = "0.7.9", features = ["json", "macros", "tokio"] }
-axum-macros = "0.4.2"
-chrono = "0.4.39"
-mime = "0.3.17"
-mime_guess = "2.0.5"
-native-dialog = "0.7.0"
-reqwest = { version = "0.12.9", features = ["json"] }
-serde = { version = "1.0.216", features = ["derive"] }
-serde_json = "1.0.133"
-sha256 = "1.5.0"
-thiserror = "2.0.6"
-tokio = "1.42.0"
-tower-http = { version = "0.6.2", features = ["limit"] }
-uuid = { version = "1.11.0", features = ["v4", "fast-rng"] }
+axum = { version = "0.8", features = ["macros"] }
+axum-server = { version = "0.7", features = ["tls-rustls", "tokio-rustls"] }
+chrono = "0.4"
+directories = "6"
+figment = { version = "0.10", features = ["toml", "test", "env"] }
+julid-rs = { version = "1", default-features = false, features = ["serde"] }
+local-ip-address = "0.6"
+log = "0.4"
+mime = "0.3"
+mime_guess = "2"
+network-interface = { version = "2", features = ["serde"] }
+rcgen = "0.14"
+reqwest = { version = "0.12", features = ["json"] }
+rustix = { version = "1", default-features = false, features = ["system"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha256 = "1.6"
+thiserror = "2"
+tokio = { version = "1", default-features = false, features = ["time", "macros", "rt-multi-thread"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "logging"] }
+toml = "0.9"
+tower-http = { version = "0.6", features = ["limit"] }

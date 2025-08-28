@@ -36,8 +36,32 @@ pub enum LocalSendError {
     #[error("Session inactive")]
     SessionInactive,
 
+    #[error("Session not found")]
+    SessionNotFound,
+
     #[error("Cancel Failed")]
     CancelFailed,
+
+    #[error("IPv6 is not supported")]
+    IPv6Unsupported,
+
+    #[error("Error getting local IP")]
+    IpAddrError(#[from] local_ip_address::Error),
+
+    #[error("Error getting network interface")]
+    NetworkInterfaceError(#[from] network_interface::Error),
+
+    #[error("Error: could not get $HOME value")]
+    NoHomeDir,
+
+    #[error("Could not generate SSL certs")]
+    SslGenFail(#[from] rcgen::Error),
+
+    #[error("Could not serialize config")]
+    ConfigSerializationFail(#[from] toml::ser::Error),
+
+    #[error("Could not parse config file")]
+    ConfigParseError(#[from] Box<figment::Error>),
 }
 
 pub type Result<T> = std::result::Result<T, LocalSendError>;
