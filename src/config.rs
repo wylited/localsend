@@ -5,16 +5,16 @@ use std::{
 };
 
 use figment::{
-    providers::{Format, Serialized, Toml},
     Figment,
+    providers::{Format, Serialized, Toml},
 };
 use local_ip_address::local_ip;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
+    DEFAULT_PORT, MULTICAST_IP,
     error::{LocalSendError, Result},
     models::Device,
-    DEFAULT_PORT, MULTICAST_IP,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,20 +27,13 @@ pub struct Config {
     pub device: Device,
 }
 
-// we ask the OS for our IP every time at start, we don't actually store a real one.
-fn deserialize_local_addr<'de, D: Deserializer<'de>>(
-    _: D,
-) -> std::result::Result<Ipv4Addr, D::Error> {
-    Ok(get_local_ip_addr())
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
             multicast_addr: SocketAddrV4::new(MULTICAST_IP, DEFAULT_PORT),
-            local_ip_addr: get_local_ip_addr(),
             download_dir: Default::default(),
             data_dir: Default::default(),
+            local_ip_addr: Ipv4Addr::from_bits(0),
             device: Default::default(),
         }
     }
@@ -95,7 +88,7 @@ impl Config {
                 .map_err(Box::new)? // boxed because the error size from figment is large
         };
 
-        log::info!("using config: {config:?}");
+        log::debug!("using config: {config:?}");
 
         Ok(config)
     }
@@ -116,6 +109,13 @@ fn gen_ssl(key: &Path, cert: &Path) -> Result<String> {
     std::fs::set_permissions(key, std::fs::Permissions::from_mode(0o400u32))?;
     std::fs::write(cert, cert_text)?;
     Ok(sha256::digest(key_text))
+}
+
+fn deserialize_local_addr<'de, D>(_: D) -> std::result::Result<Ipv4Addr, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(get_local_ip_addr())
 }
 
 fn get_local_ip_addr() -> Ipv4Addr {

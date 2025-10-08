@@ -1,24 +1,25 @@
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, time::Duration};
 
 use axum::{
+    Json,
     body::Bytes,
     extract::{ConnectInfo, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use julid::Julid;
 use log::{debug, error, info, warn};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::{
+    LocalEvent, LocalService, Peers, ReceiveDialog, ReceiveRequest, SendingType, Sessions,
     error::{LocalSendError, Result},
     models::{Device, FileMetadata},
-    LocalService, ReceiveDialog, ReceiveRequest, TransferEvent,
 };
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct Session {
     pub session_id: String,
     pub files: BTreeMap<String, FileMetadata>,
@@ -29,7 +30,7 @@ pub struct Session {
     pub addr: SocketAddr,
 }
 
-#[derive(PartialEq, Deserialize, Serialize)]
+#[derive(PartialEq, Deserialize, Serialize, Clone, Copy)]
 pub enum SessionStatus {
     Pending,
     Active,
@@ -53,127 +54,18 @@ pub struct PrepareUploadRequest {
 }
 
 impl LocalService {
-    pub async fn prepare_upload(
-        &self,
-        peer: &str,
-        files: BTreeMap<String, FileMetadata>,
-    ) -> Result<PrepareUploadResponse> {
-        let Some((addr, device)) = self.peers.lock().await.get(peer).cloned() else {
-            return Err(LocalSendError::PeerNotFound);
-        };
-
-        let request = self
-            .client
-            .post(format!(
-                "{}://{}/api/localsend/v2/prepare-upload",
-                device.protocol, addr
-            ))
-            .json(&PrepareUploadRequest {
-                info: self.config.device.clone(),
-                files: files.clone(),
-            });
-
-        let r = request.timeout(Duration::from_secs(30)).build().unwrap();
-        debug!("sending '{r:?}' to peer at {addr:?}");
-
-        let response = self.client.execute(r).await?;
-
-        debug!("Response: {response:?}");
-
-        let response: PrepareUploadResponse = match response.json().await {
-            Err(e) => {
-                error!("got error deserializing response: {e:?}");
-                return Err(LocalSendError::RequestError(e));
-            }
-            Ok(r) => r,
-        };
-
-        debug!("decoded response: {response:?}");
-
-        let session = Session {
-            session_id: response.session_id.clone(),
-            files,
-            file_tokens: response.files.clone(),
-            receiver: device,
-            sender: self.config.device.clone(),
-            status: SessionStatus::Active,
-            addr,
-        };
-
-        self.sessions
-            .lock()
-            .await
-            .insert(response.session_id.clone(), session);
-
-        Ok(response)
-    }
-
     pub async fn send_file(&self, peer: &str, file_path: PathBuf) -> Result<()> {
-        // Generate file metadata
-        let file_metadata = FileMetadata::from_path(&file_path)?;
-
-        // Prepare files map
-        let mut files = BTreeMap::new();
-        files.insert(file_metadata.id.clone(), file_metadata.clone());
-
-        // Prepare upload
-        let prepare_response = self.prepare_upload(peer, files).await?;
-
-        // Get file token
-        let token = prepare_response
-            .files
-            .get(&file_metadata.id)
-            .ok_or(LocalSendError::InvalidToken)?;
-
-        // Read file contents
-        let file_contents = tokio::fs::read(&file_path).await?;
-        let bytes = Bytes::from(file_contents);
-
-        // Upload file
-        self.send_bytes(
-            &prepare_response.session_id,
-            &file_metadata.id,
-            token,
-            bytes,
-        )
-        .await?;
-
-        Ok(())
+        let content = SendingType::File(file_path);
+        self.send_content(peer, content).await
     }
 
     pub async fn send_text(&self, peer: &str, text: &str) -> Result<()> {
-        // Generate file metadata
-        let file_metadata = FileMetadata::from_text(text)?;
-
-        // Prepare files map
-        let mut files = BTreeMap::new();
-        files.insert(file_metadata.id.clone(), file_metadata.clone());
-
-        // Prepare upload
-        let prepare_response = self.prepare_upload(peer, files).await?;
-
-        // Get file token
-        let token = prepare_response
-            .files
-            .get(&file_metadata.id)
-            .ok_or(LocalSendError::InvalidToken)?;
-
-        let bytes = Bytes::from(text.to_owned());
-
-        // Upload file
-        self.send_bytes(
-            &prepare_response.session_id,
-            &file_metadata.id,
-            token,
-            bytes,
-        )
-        .await?;
-
-        Ok(())
+        let content = SendingType::Text(text.to_owned());
+        self.send_content(peer, content).await
     }
 
     pub async fn cancel_upload(&self, session_id: &str) -> Result<()> {
-        let sessions = self.sessions.lock().await;
+        let sessions = self.sessions.read().await;
         let session = sessions
             .get(session_id)
             .ok_or(LocalSendError::SessionNotFound)?;
@@ -194,48 +86,107 @@ impl LocalService {
         Ok(())
     }
 
-    async fn send_bytes(
-        &self,
-        session_id: &str,
-        content_id: &str,
-        token: &String,
-        body: Bytes,
-    ) -> Result<()> {
-        let sessions = self.sessions.lock().await;
-        let session = sessions.get(session_id).unwrap();
+    // spawns a tokio task to wait for responses
+    async fn send_content(&self, peer: &str, content: SendingType) -> Result<()> {
+        let (metadata, bytes) = match content {
+            SendingType::File(path) => {
+                let contents = tokio::fs::read(&path).await?;
+                let bytes = Bytes::from(contents);
+                (FileMetadata::from_path(&path)?, bytes)
+            }
+            SendingType::Text(text) => (FileMetadata::from_text(&text)?, Bytes::from(text)),
+        };
 
-        if session.status != SessionStatus::Active {
-            return Err(LocalSendError::SessionInactive);
-        }
+        let mut files = BTreeMap::new();
+        files.insert(metadata.id.clone(), metadata.clone());
 
-        if session.file_tokens.get(content_id) != Some(token) {
-            return Err(LocalSendError::InvalidToken);
-        }
+        let ourself = self.config.device.clone();
+        let client = self.client.clone();
+        let tx = self.transfer_event_tx.clone();
+        let peer = peer.to_string();
+        let sessions = self.sessions.clone();
+        let peers = self.peers.clone();
 
-        let request = self.client
-                          .post(format!(
-                              "{}://{}/api/localsend/v2/upload?sessionId={session_id}&fileId={content_id}&token={token}",
-                              session.receiver.protocol, session.addr))
-                          .body(body).build()?;
+        tokio::task::spawn(async move {
+            fn send_tx(msg: LocalEvent, tx: &UnboundedSender<LocalEvent>) {
+                if let Err(e) = tx.send(msg.clone()) {
+                    log::error!("got error sending {msg:?} to frontend: {e:?}");
+                }
+            }
 
-        debug!("Uploading bytes: {request:?}");
-        let response = self.client.execute(request).await?;
+            let prepare_response =
+                do_prepare_upload(ourself, &client, &peer, &peers, &sessions, files).await;
 
-        if response.status() != 200 {
-            warn!("Upload failed: {response:?}");
-            return Err(LocalSendError::UploadFailed);
-        }
+            let prepare_response = match prepare_response {
+                Ok(r) => r,
+                Err(e) => {
+                    log::debug!("got error from remote receiver: {e:?}");
+                    send_tx(LocalEvent::SendDenied, &tx);
+                    return;
+                }
+            };
 
+            send_tx(LocalEvent::SendApproved(metadata.id.clone()), &tx);
+
+            let token = match prepare_response.files.get(&metadata.id) {
+                Some(t) => t,
+                None => {
+                    send_tx(
+                        LocalEvent::SendFailed {
+                            error: "missing token in prepare response from remote".into(),
+                        },
+                        &tx,
+                    );
+                    return;
+                }
+            };
+
+            let content_id = &metadata.id;
+            let session_id = prepare_response.session_id;
+            log::info!(
+                "sending {content_id} to {}",
+                peers
+                    .read()
+                    .await
+                    .get(&peer)
+                    .map(|(_, peer)| peer.alias.as_str())
+                    .unwrap_or("unknown peer")
+            );
+            let resp = do_send_bytes(sessions, client, &session_id, content_id, token, bytes).await;
+
+            match resp {
+                Ok(_) => {
+                    send_tx(
+                        LocalEvent::SendSuccess {
+                            content: content_id.to_owned(),
+                            session: session_id,
+                        },
+                        &tx,
+                    );
+                }
+                Err(e) => {
+                    send_tx(
+                        LocalEvent::SendFailed {
+                            error: format!("{e:?}"),
+                        },
+                        &tx,
+                    );
+                }
+            }
+        });
         Ok(())
     }
 }
 
-pub async fn prepare_upload(
+pub async fn handle_prepare_upload(
     State(service): State<LocalService>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<PrepareUploadRequest>,
 ) -> impl IntoResponse {
-    info!("Received upload request from alias: {}", req.info.alias);
+    info!(
+        "Received upload request from {} at {addr:?}",
+        req.info.alias
+    );
 
     let id = Julid::new();
     let (tx, mut rx) = unbounded_channel();
@@ -247,7 +198,7 @@ pub async fn prepare_upload(
 
     match service
         .transfer_event_tx
-        .send(TransferEvent::ReceiveRequest { id, request })
+        .send(LocalEvent::ReceiveRequest { id, request })
     {
         Ok(_) => {}
         Err(e) => {
@@ -286,7 +237,7 @@ pub async fn prepare_upload(
 
     service
         .sessions
-        .lock()
+        .write()
         .await
         .insert(session_id.clone(), session);
 
@@ -300,7 +251,15 @@ pub async fn prepare_upload(
         .into_response()
 }
 
-pub async fn receive_upload(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadParams {
+    session_id: String,
+    file_id: String,
+    token: String,
+}
+
+pub async fn handle_receive_upload(
     Query(params): Query<UploadParams>,
     State(service): State<LocalService>,
     body: Bytes,
@@ -311,10 +270,13 @@ pub async fn receive_upload(
     let token = &params.token;
 
     // Get session and validate
-    let mut sessions_lock = service.sessions.lock().await;
-    let session = match sessions_lock.get_mut(session_id) {
-        Some(session) => session,
-        None => return StatusCode::BAD_REQUEST.into_response(),
+
+    let session = {
+        let lock = service.sessions.read().await;
+        match lock.get(session_id).cloned() {
+            Some(session) => session,
+            None => return StatusCode::BAD_REQUEST.into_response(),
+        }
     };
 
     if session.status != SessionStatus::Active {
@@ -330,11 +292,7 @@ pub async fn receive_upload(
     let file_metadata = match session.files.get(file_id) {
         Some(metadata) => metadata,
         None => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "File not found".to_string(),
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, "File not found".to_string()).into_response();
         }
     };
 
@@ -342,11 +300,8 @@ pub async fn receive_upload(
 
     // Create directory if it doesn't exist
     if let Err(e) = tokio::fs::create_dir_all(download_dir).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to create directory: {e}"),
-        )
-            .into_response();
+        log::error!("could not create download directory '{download_dir:?}', got {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not save content").into_response();
     }
 
     // Create file path
@@ -354,53 +309,158 @@ pub async fn receive_upload(
 
     // Write file
     if let Err(e) = tokio::fs::write(&file_path, body).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to write file: {e}"),
-        )
-            .into_response();
+        log::warn!("could not save content to {file_path:?}, got {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not save content").into_response();
     }
 
+    log::info!(
+        "saved content from {} to {file_path:?}",
+        &session.sender.alias
+    );
     if let Ok(id) = Julid::from_str(session_id) {
-        service.send_event(TransferEvent::Received(id));
+        service.send_event(LocalEvent::ReceivedInbound(id));
     };
 
     StatusCode::OK.into_response()
 }
 
-// Query parameters struct
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UploadParams {
+pub struct CancelParams {
     session_id: String,
-    file_id: String,
-    token: String,
 }
 
 pub async fn handle_cancel(
     Query(params): Query<CancelParams>,
     State(service): State<LocalService>,
 ) -> impl IntoResponse {
-    let mut sessions_lock = service.sessions.lock().await;
+    // it's OK to hold this lock for the whole body here, we hardly ever have to
+    // handle cancels and none of these ops are slow.
+    let mut sessions_lock = service.sessions.write().await;
     let session = match sessions_lock.get_mut(&params.session_id) {
         Some(session) => session,
         None => return StatusCode::BAD_REQUEST.into_response(),
     };
 
-    debug!("got cancel request for {}", params.session_id);
+    info!(
+        "{} cancelled the transfer of {}",
+        &session.sender.alias,
+        session
+            .files
+            .values()
+            .map(|f| f.file_name.clone())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
 
     session.status = SessionStatus::Cancelled;
 
     if let Ok(id) = Julid::from_str(&params.session_id) {
-        service.send_event(TransferEvent::Cancelled(id));
-    };
-
-    StatusCode::OK.into_response()
+        service.send_event(LocalEvent::Cancelled { session_id: id });
+        StatusCode::OK.into_response()
+    } else {
+        StatusCode::BAD_REQUEST.into_response()
+    }
 }
 
-// Cancel parameters struct
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CancelParams {
-    session_id: String,
+// free function that can be called inside a future in tokio::task::spawn()
+async fn do_send_bytes(
+    sessions: Sessions,
+    client: Client,
+    session_id: &str,
+    content_id: &str,
+    token: &str,
+    body: Bytes,
+) -> Result<()> {
+    let session = sessions
+        .read()
+        .await
+        .get(session_id)
+        .cloned()
+        .ok_or(LocalSendError::SessionNotFound)?;
+
+    if session.status != SessionStatus::Active {
+        return Err(LocalSendError::SessionInactive);
+    }
+
+    if session.file_tokens.get(content_id).map(|t| t.as_str()) != Some(token) {
+        return Err(LocalSendError::InvalidToken);
+    }
+
+    let request = client
+                          .post(format!(
+                              "{}://{}/api/localsend/v2/upload?sessionId={session_id}&fileId={content_id}&token={token}",
+                              session.receiver.protocol, session.addr))
+                          .body(body);
+
+    debug!("Uploading bytes: {request:?}");
+    let response = request.send().await?;
+
+    if response.status() != 200 {
+        log::warn!("non-200 remote response: {response:?}");
+        Err(LocalSendError::UploadFailed)
+    } else {
+        Ok(())
+    }
+}
+
+// free function that can be called inside a future in tokio::task::spawn()
+async fn do_prepare_upload(
+    ourself: Device,
+    client: &reqwest::Client,
+    peer: &str,
+    peers: &Peers,
+    sessions: &Sessions,
+    files: BTreeMap<String, FileMetadata>,
+) -> Result<PrepareUploadResponse> {
+    let Some((addr, device)) = peers.read().await.get(peer).cloned() else {
+        return Err(LocalSendError::PeerNotFound);
+    };
+
+    log::debug!("preparing upload request");
+
+    let request = client
+        .post(format!(
+            "{}://{}/api/localsend/v2/prepare-upload",
+            device.protocol, addr
+        ))
+        .json(&PrepareUploadRequest {
+            info: ourself.clone(),
+            files: files.clone(),
+        })
+        .timeout(Duration::from_secs(30));
+
+    debug!("sending '{request:?}' to peer at {addr:?}");
+
+    // tokio::spawn(future);
+    let response = request.send().await?;
+
+    debug!("Response: {response:?}");
+
+    let response: PrepareUploadResponse = match response.json().await {
+        Err(e) => {
+            error!("got error deserializing response: {e:?}");
+            return Err(LocalSendError::RequestError(e));
+        }
+        Ok(r) => r,
+    };
+
+    debug!("decoded response: {response:?}");
+
+    let session = Session {
+        session_id: response.session_id.clone(),
+        files,
+        file_tokens: response.files.clone(),
+        receiver: device,
+        sender: ourself.clone(),
+        status: SessionStatus::Active,
+        addr,
+    };
+
+    sessions
+        .write()
+        .await
+        .insert(response.session_id.clone(), session);
+
+    Ok(response)
 }
