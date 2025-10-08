@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::LocalSendError;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileMetadata {
     pub id: String,
@@ -21,7 +21,7 @@ pub struct FileMetadata {
     pub metadata: Option<FileMetadataExt>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileMetadataExt {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modified: Option<String>,
@@ -81,7 +81,7 @@ impl FileMetadata {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DeviceType {
     Mobile,
@@ -109,6 +109,14 @@ pub struct Device {
     #[serde(default)]
     pub announce: Option<bool>,
 }
+
+impl PartialEq for Device {
+    fn eq(&self, other: &Self) -> bool {
+        self.fingerprint == other.fingerprint
+    }
+}
+
+impl Eq for Device {}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
