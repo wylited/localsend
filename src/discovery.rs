@@ -1,17 +1,18 @@
 use std::{
     net::{SocketAddr, SocketAddrV4},
     sync::Arc,
-    time::Duration,
 };
 
 use axum::{
-    extract::{ConnectInfo, State},
     Json,
+    extract::{ConnectInfo, State},
+    response::IntoResponse,
 };
 use log::{debug, error, trace, warn};
+use reqwest::StatusCode;
 use tokio::net::UdpSocket;
 
-use crate::{models::Device, Config, LocalService, RunningState};
+use crate::{Config, DEFAULT_INTERVAL, LocalService, RunningState, models::Device};
 
 impl LocalService {
     pub async fn announce(&self, socket: Option<SocketAddr>) -> crate::error::Result<()> {
@@ -29,14 +30,14 @@ impl LocalService {
     pub async fn listen_multicast(&self) -> crate::error::Result<()> {
         let mut buf = [0; 65536];
 
-        let mut timeout = tokio::time::interval(Duration::from_secs(5));
+        let mut timeout = tokio::time::interval(DEFAULT_INTERVAL);
         timeout.tick().await;
 
         loop {
             tokio::select! {
                 _ = timeout.tick() => {
                     let rstate = {
-                        *self.running_state.lock().await
+                        *self.running_state.read().await
                     };
                     if rstate == RunningState::Stopping
                     {
@@ -45,7 +46,6 @@ impl LocalService {
                     }
                 },
                 r = self.socket.recv_from(&mut buf) => {
-                    trace!("received multicast datagram");
                     match r {
                         Ok((size, src)) => {
                             let received_msg = String::from_utf8_lossy(&buf[..size]);
@@ -63,7 +63,7 @@ impl LocalService {
 
     async fn process_device(&self, message: &str, src: SocketAddr, config: &Config) {
         if let Ok(device) = serde_json::from_str::<Device>(message) {
-            if device.fingerprint == self.config.device.fingerprint {
+            if device == self.config.device {
                 return;
             }
 
@@ -71,7 +71,7 @@ impl LocalService {
             src.set_port(device.port); // Update the port to the one the device sent
 
             {
-                let mut peers = self.peers.lock().await;
+                let mut peers = self.peers.write().await;
                 peers.insert(device.fingerprint.clone(), (src, device.clone()));
             }
 
@@ -100,15 +100,18 @@ pub async fn register_device(
     State(service): State<LocalService>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(device): Json<Device>,
-) -> Json<Device> {
+) -> impl IntoResponse {
+    if device == service.config.device {
+        return StatusCode::ALREADY_REPORTED.into_response();
+    }
     let mut addr = addr;
     addr.set_port(service.config.device.port);
     service
         .peers
-        .lock()
+        .write()
         .await
         .insert(device.fingerprint.clone(), (addr, device.clone()));
-    Json(device)
+    Json(device).into_response()
 }
 
 //-************************************************************************
@@ -135,33 +138,3 @@ async fn announce_multicast(
     socket.send_to(msg.as_bytes(), addr).await?;
     Ok(())
 }
-
-/*
-async fn announce_unicast(
-    device: &Device,
-    ip: Option<SocketAddr>,
-    client: reqwest::Client,
-) -> crate::error::Result<()> {
-    // for enumerating subnet peers when multicast fails (https://github.com/localsend/protocol?tab=readme-ov-file#32-http-legacy-mode)
-    let std::net::IpAddr::V4(ip) = local_ip_address::local_ip()? else {
-        unreachable!()
-    };
-
-    let mut _network_ip = ip;
-    let nifs = NetworkInterface::show()?;
-    for addr in nifs.into_iter().flat_map(|i| i.addr) {
-        if let Addr::V4(V4IfAddr {
-            ip: ifip,
-            netmask: Some(netmask),
-            ..
-        }) = addr
-            && ip == ifip
-        {
-            _network_ip = ip & netmask;
-            break;
-        }
-    }
-
-    todo!()
-}
-*/
